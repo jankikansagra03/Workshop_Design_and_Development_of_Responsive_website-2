@@ -188,6 +188,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'change_status') {
 if (isset($_POST['action']) && $_POST['action'] === 'update') {
     $productId = (int)$_POST['product_id'];
     $remove_main_image = isset($_POST['remove_main_image']) && $_POST['remove_main_image'] == 1;
+    // Comes from checkbox inputs named remove_gallery_images[] in the form.
+    // Example:
+    // $_POST['remove_gallery_images'] = [
+    //   'uploads/products/gallery/a.jpg',
+    //   'uploads/products/gallery/b.jpg'
+    // ];
     $remove_gallery_images = $_POST['remove_gallery_images'] ?? [];
 
     // 1) Fetch existing product
@@ -222,17 +228,28 @@ if (isset($_POST['action']) && $_POST['action'] === 'update') {
         }
 
         // ----- GALLERY: start from existing -----
+        // Example stored string in DB:
+        // $old_gallery_string = 'uploads/products/gallery/a.jpg,uploads/products/gallery/b.jpg';
+        // After explode + trim:
+        // $existing_gallery = ['uploads/products/gallery/a.jpg', 'uploads/products/gallery/b.jpg'];
         $existing_gallery = !empty($old_gallery_string) ? explode(',', $old_gallery_string) : [];
         $existing_gallery = array_map('trim', $existing_gallery);
 
-        // Remove selected old gallery images (DB side)
+        // Remove selected old gallery images (DB side).
+        // Example:
+        // $remove_gallery_images = ['uploads/products/gallery/b.jpg'];
+        // Result after filter:
+        // $existing_gallery = ['uploads/products/gallery/a.jpg'];
         if (!empty($remove_gallery_images)) {
             $existing_gallery = array_filter($existing_gallery, function ($img) use ($remove_gallery_images) {
                 return !in_array($img, $remove_gallery_images, true);
             });
         }
 
-        // Prepare new gallery file paths (no move yet)
+        // Prepare new gallery file paths (no move yet).
+        // $new_gallery_files stores pairs so we can move files only after DB update succeeds.
+        // Example element:
+        // ['tmp' => 'C:/Windows/Temp/php1234.tmp', 'dest' => 'uploads/products/gallery/65f1_new.jpg']
         $new_gallery_files = []; // list of ['tmp' => tmp_path, 'dest' => final_path]
 
         if (!empty($_FILES['gallery_images']['name']) && is_array($_FILES['gallery_images']['name'])) {
@@ -241,6 +258,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'update') {
                 mkdir($gallery_dir, 0755, true);
             }
 
+            // If user selects 2 files, then $_FILES['gallery_images']['name'] may look like:
+            // ['front.jpg', 'side.jpg']
+            // and loop runs twice (i=0 and i=1).
             $galleryCount = count($_FILES['gallery_images']['name']);
             for ($i = 0; $i < $galleryCount; $i++) {
                 if (empty($_FILES['gallery_images']['name'][$i])) {
@@ -250,11 +270,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'update') {
                 $dest = $gallery_dir . uniqid() . $_FILES['gallery_images']['name'][$i];
                 $tmp = $_FILES['gallery_images']['tmp_name'][$i];
                 $new_gallery_files[] = ['tmp' => $tmp, 'dest' => $dest];
-                $existing_gallery[] = $dest; // include in final gallery list
+                // Also append newly uploaded path to final gallery list used in DB update.
+                // Example with 2 selected files:
+                // after i=0 -> existing_gallery adds first generated path
+                // after i=1 -> existing_gallery adds second generated path
+                $existing_gallery[] = $dest;
             }
         }
 
-        // Final gallery string for DB
+        // Final gallery string for DB.
+        // Example:
+        // $existing_gallery = ['uploads/products/gallery/a.jpg', 'uploads/products/gallery/65f1_new.jpg'];
+        // $gallery_images_path = 'uploads/products/gallery/a.jpg,uploads/products/gallery/65f1_new.jpg';
         $gallery_images_path = !empty($existing_gallery) ? implode(',', $existing_gallery) : null;
 
         // =========================
@@ -308,6 +335,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'update') {
                 }
 
                 // (b) Move new gallery images
+                // If 2 new files were selected, this foreach runs 2 times
+                // and moves both tmp files to their final destinations.
                 foreach ($new_gallery_files as $file) {
                     @move_uploaded_file($file['tmp'], $file['dest']);
                 }
