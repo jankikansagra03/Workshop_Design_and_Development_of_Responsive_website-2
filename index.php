@@ -33,6 +33,73 @@
 <?php
 include_once 'db_config.php';
 
+// code to insert data
+
+if (isset($_POST['action']) && $_POST['action'] === 'create') {
+    $name = $_POST['name'];
+    $categoryId = $_POST['category_id'];
+    $brand = $_POST['brand'];
+    $description = $_POST['description'];
+    $longDescription = $_POST['long_description'];
+    $price = $_POST['price'];
+    $discount = $_POST['discount'];
+    $stock = $_POST['stock'];
+    $status = ($_POST['status'] ?? 'Active') === 'Inactive' ? 'Inactive' : 'Active';
+
+    $main_image = "uploads/products/main/" . uniqid() . $_FILES['main_image']['name'];
+    $gallery_images = $_FILES['gallery_images']['name'];
+
+    $gallery_images = [];
+    $temp_gallery_images = [];
+    foreach ($_FILES['gallery_images']['name'] as $index => $filename) {
+        $uniqueName = uniqid() . $filename;
+        $temp_gallery_images[$index] = $_FILES['gallery_images']['tmp_name'][$index];
+        $gallery_images[$index] = "uploads/products/gallery/" . $uniqueName;
+    }
+    $main_dir = 'uploads/products/main/';
+    $gallery_dir = 'uploads/products/gallery/';
+    if (!is_dir($main_dir)) {
+        mkdir($main_dir, 0755, true);
+    }
+    if (!is_dir($gallery_dir)) {
+        mkdir($gallery_dir, 0755, true);
+    }
+
+
+    // Step 2: Insert product and image paths into database.
+    $galleryImagesValue = !empty($gallery_images) ? json_encode($gallery_images) : null;
+    $insertStmt = $connection->prepare("CALL sp_products_insert(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    if ($insertStmt) {
+        $insertStmt->bind_param(
+            'sisdiisssss',
+            $name,
+            $categoryId,
+            $brand,
+            $price,
+            $discount,
+            $stock,
+            $description,
+            $longDescription,
+            $main_image,
+            $galleryImagesValue,
+            $status
+        );
+
+        if ($insertStmt->execute()) {
+            move_uploaded_file($_FILES['main_image']['tmp_name'], $main_image);
+            foreach ($temp_gallery_images as $index => $tmp_name) {
+                move_uploaded_file($tmp_name, $gallery_images[$index]);
+            }
+            setcookie('success', 'Product added successfully!', time() + 5);
+            // echo "<script> window.location.href = 'teach.php';</script>";
+        } else {
+            setcookie('error', 'Failed to add product. Please try again.', time() + 5);
+        }
+
+        $insertStmt->close();
+        flush_stored_results($connection);
+    }
+}
 // Step 1: Load DB connection for pagination queries.
 ?>
 
