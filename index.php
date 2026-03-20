@@ -188,6 +188,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'change_status') {
 if (isset($_POST['action']) && $_POST['action'] === 'update') {
     $productId = (int)$_POST['product_id'];
     $remove_main_image = isset($_POST['remove_main_image']) && $_POST['remove_main_image'] == 1;
+    //
     // Comes from checkbox inputs named remove_gallery_images[] in the form.
     // Example:
     // $_POST['remove_gallery_images'] = [
@@ -229,17 +230,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'update') {
 
         // ----- GALLERY: start from existing -----
         // Example stored string in DB:
-        // $old_gallery_string = 'uploads/products/gallery/a.jpg,uploads/products/gallery/b.jpg';
+        // $old_gallery_string = 'uploads/products/gallery/a.jpg,uploads/products/gallery/b.jpg','uploads/products/gallery/c.jpg','uploads/products/gallery/d.jpg';
         // After explode + trim:
-        // $existing_gallery = ['uploads/products/gallery/a.jpg', 'uploads/products/gallery/b.jpg'];
+        // $existing_gallery = ['uploads/products/gallery/a.jpg', 'uploads/products/gallery/b.jpg', 'uploads/products/gallery/c.jpg', 'uploads/products/gallery/d.jpg'];
         $existing_gallery = !empty($old_gallery_string) ? explode(',', $old_gallery_string) : [];
         $existing_gallery = array_map('trim', $existing_gallery);
 
         // Remove selected old gallery images (DB side).
         // Example:
-        // $remove_gallery_images = ['uploads/products/gallery/b.jpg'];
+        // $remove_gallery_images = ['uploads/products/gallery/b.jpg','uploads/products/gallery/a.jpg'];
         // Result after filter:
-        // $existing_gallery = ['uploads/products/gallery/a.jpg'];
+        // $existing_gallery = ['uploads/products/gallery/c.jpg'];
         if (!empty($remove_gallery_images)) {
             $existing_gallery = array_filter($existing_gallery, function ($img) use ($remove_gallery_images) {
                 return !in_array($img, $remove_gallery_images, true);
