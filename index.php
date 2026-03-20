@@ -30,11 +30,34 @@
 <script src="js/bootstrap.bundle.min.js"></script>
 <script src="js/jquery-3.7.1.min.js"></script>
 <script src="js/validate.js"></script>
+<script>
+    $(document).ready(function() {
+        // Step 1: Listen to search input and redirect with query params.
+        var refreshTimer;
+        var searchInput = $('#searchInput');
+
+        // Focus and move cursor to end
+        searchInput.focus();
+        var val = searchInput.val();
+        searchInput[0].setSelectionRange(val.length, val.length);
+
+        searchInput.on('input', function() {
+            clearTimeout(refreshTimer);
+            var searchValue = $(this).val().trim();
+            refreshTimer = setTimeout(function() {
+                var url = '?page=1';
+                if (searchValue) {
+                    url += '&search=' + encodeURIComponent(searchValue);
+                }
+                window.location.href = url;
+            }, 500);
+        });
+    });
+</script>
 <?php
 include_once 'db_config.php';
 
-// code to insert data
-
+// Step 2: Handle create action and persist uploaded images.
 if (isset($_POST['action']) && $_POST['action'] === 'create') {
     $name = $_POST['name'];
     $categoryId = $_POST['category_id'];
@@ -65,8 +88,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
         mkdir($gallery_dir, 0755, true);
     }
 
-
-    // Step 2: Insert product and image paths into database.
     $galleryImagesValue = !empty($gallery_images) ? json_encode($gallery_images) : null;
     $insertStmt = $connection->prepare("CALL sp_products_insert(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     if ($insertStmt) {
@@ -91,7 +112,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
                 move_uploaded_file($tmp_name, $gallery_images[$index]);
             }
             setcookie('success', 'Product added successfully!', time() + 5);
-            // echo "<script> window.location.href = 'teach.php';</script>";
+            // echo "<script> window.location.href = 'teach.php';</?php>";
         } else {
             setcookie('error', 'Failed to add product. Please try again.', time() + 5);
         }
@@ -100,7 +121,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
         flush_stored_results($connection);
     }
 }
-// Step 1: Load DB connection for pagination queries.
 ?>
 
 <div class="container">
@@ -133,7 +153,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
         </div>
 
         <!-- Search Box -->
-
         <div class="col-md-10">
             <input type="text" id="searchInput" class="form-control" placeholder="Search products..."
                 value="<?= isset($_GET['search']) ? htmlspecialchars(trim($_GET['search']), ENT_QUOTES) : '' ?>">
@@ -251,18 +270,19 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
     <?php
     include_once 'db_config.php';
 
-    // Select all products from the database
+    // Step 3: Apply search filter, then paginate matching products.
+    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+    $hasSearch = $search !== '';
 
-    // $query = "SELECT * FROM products";
-    // $selectStmt = $connection->prepare($query);
-    // $selectStmt->execute();
-    // $result = $selectStmt->get_result();
-
-    // Step 2: Count total rows and compute pagination values.
-
-    $count_query = "SELECT COUNT(*) AS total FROM products";
-    $countStmt = $connection->prepare($count_query);
-
+    if ($hasSearch) {
+        $searchLike = '%' . $search . '%';
+        $count_query = "SELECT COUNT(*) AS total FROM products WHERE name LIKE ? OR brand LIKE ? OR description LIKE ? OR long_description LIKE ?";
+        $countStmt = $connection->prepare($count_query);
+        $countStmt->bind_param('ssss', $searchLike, $searchLike, $searchLike, $searchLike);
+    } else {
+        $count_query = "SELECT COUNT(*) AS total FROM products";
+        $countStmt = $connection->prepare($count_query);
+    }
 
     $countStmt->execute();
     $countResult = $countStmt->get_result();
@@ -270,24 +290,23 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
     $countStmt->close();
     flush_stored_results($connection);
 
-    $per_page = 10;
+    $per_page = 4;
     $total_pages = max(1, (int) ceil($totalProducts / $per_page));
     $page = isset($_GET['page']) && is_numeric($_GET['page']) ? (int) $_GET['page'] : 1;
-    if ($page < 1) {
-        $page = 1;
-    }
-    if ($page > $total_pages) {
-        $page = $total_pages;
-    }
+    if ($page < 1) $page = 1;
+    if ($page > $total_pages) $page = $total_pages;
 
     $offset = ($page - 1) * $per_page;
 
-
-    // Step 3: Fetch only the records for the current page.
-    $query = "SELECT * FROM products ORDER BY id LIMIT ?, ?";
-    $selectStmt = $connection->prepare($query);
-    $selectStmt->bind_param("ii", $offset, $per_page);
-
+    if ($hasSearch) {
+        $query = "SELECT * FROM products WHERE name LIKE ? OR brand LIKE ? OR description LIKE ? ORDER BY id LIMIT ?, ?";
+        $selectStmt = $connection->prepare($query);
+        $selectStmt->bind_param("sssii", $searchLike, $searchLike, $searchLike, $offset, $per_page);
+    } else {
+        $query = "SELECT * FROM products ORDER BY id LIMIT ?, ?";
+        $selectStmt = $connection->prepare($query);
+        $selectStmt->bind_param("ii", $offset, $per_page);
+    }
 
     $selectStmt->execute();
     $result = $selectStmt->get_result();
@@ -371,25 +390,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
         <ul class="pagination justify-content-center">
             <li class="page-item <?= $page <= 1 ? 'disabled' : '' ?>">
                 <a class="page-link"
-                    href="?<?= http_build_query(['page' => $page - 1]) ?>">Previous</a>
+                    href="?page=<?= $page - 1 ?><?= $search ? '&search=' . urlencode($search) : '' ?>">Previous</a>
             </li>
 
             <?php for ($p = 1; $p <= $total_pages; $p++): ?>
                 <li class="page-item <?= $p === $page ? 'active' : '' ?>">
                     <a class="page-link"
-                        href="?<?= http_build_query(['page' => $p]) ?>"><?= $p ?></a>
+                        href="?page=<?= $p ?><?= $search ? '&search=' . urlencode($search) : '' ?>"><?= $p ?></a>
                 </li>
             <?php endfor; ?>
 
             <li class="page-item <?= $page >= $total_pages ? 'disabled' : '' ?>">
                 <a class="page-link"
-                    href="?<?= http_build_query(['page' => $page + 1]) ?>">Next</a>
+                    href="?page=<?= $page + 1 ?><?= $search ? '&search=' . urlencode($search) : '' ?>">Next</a>
             </li>
         </ul>
     </nav>
     <br>
     <br>
-</div>
-<br>
-<br>
 </div>
