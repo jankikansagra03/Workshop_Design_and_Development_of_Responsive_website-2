@@ -57,7 +57,7 @@
 <?php
 include_once 'db_config.php';
 
-// Step 2: Handle create action and store product with images.
+// Step 3: Handle create action and insert new product records.
 if (isset($_POST['action']) && $_POST['action'] === 'create') {
     $name = $_POST['name'];
     $categoryId = $_POST['category_id'];
@@ -124,7 +124,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'create') {
     }
 }
 
-// Step 3: Handle delete action and cleanup image files.
+//delete Prodcut
+// Step 4: Handle delete action and remove related image files.
 if (isset($_POST['action']) && $_POST['action'] === 'delete') {
     $productId = (int) $_POST['product_id'];
 
@@ -165,10 +166,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'delete') {
     }
 }
 
-// Step 4: Toggle product status between Active and Inactive.
+// Step 5: Handle status toggle requests from status modal.
 if (isset($_POST['action']) && $_POST['action'] === 'change_status') {
     $productId = $_POST['product_id'];
-    $newStatus = $_POST['new_status'];
+    $newStatus = (($_POST['new_status'] ?? 'Active') === 'Inactive') ? 'Inactive' : 'Active';
 
     $updateQuery = "UPDATE products SET status=? WHERE id=?";
     $updateStmt = mysqli_prepare($connection, $updateQuery);
@@ -180,6 +181,157 @@ if (isset($_POST['action']) && $_POST['action'] === 'change_status') {
             setcookie('error', 'Failed to update product status. Please try again.', time() + 5);
         }
         mysqli_stmt_close($updateStmt);
+    }
+}
+
+// Step 2: Handle update action with optional image replacement/removal.
+if (isset($_POST['action']) && $_POST['action'] === 'update') {
+    $productId = (int)$_POST['product_id'];
+    $remove_main_image = isset($_POST['remove_main_image']) && $_POST['remove_main_image'] == 1;
+    $remove_gallery_images = $_POST['remove_gallery_images'] ?? [];
+
+    // 1) Fetch existing product
+    $query = "SELECT * FROM products WHERE id = ?";
+    $selectStmt = mysqli_prepare($connection, $query);
+    mysqli_stmt_bind_param($selectStmt, 'i', $productId);
+    mysqli_stmt_execute($selectStmt);
+    $selectResult = mysqli_stmt_get_result($selectStmt);
+    $existing_product = mysqli_fetch_assoc($selectResult);
+    mysqli_stmt_close($selectStmt);
+
+    if ($existing_product) {
+
+        // Keep originals for later deletion decisions
+        $old_main_image = $existing_product['image'];
+        $old_gallery_string = $existing_product['gallery_images'];
+
+
+        // ----- MAIN IMAGE -----
+        $main_image_path = $old_main_image; // default: keep old
+        $main_tmp_file = null; // tmp path of new uploaded main image (if any)
+
+        if ($remove_main_image) {
+            $main_image_path = null; // remove in DB
+        } elseif (!empty($_FILES['main_image']['name'])) {
+            $main_dir = 'uploads/products/main/';
+            if (!is_dir($main_dir)) {
+                mkdir($main_dir, 0755, true);
+            }
+            $main_image_path = $main_dir . uniqid() . '_' . basename($_FILES['main_image']['name']);
+            $main_tmp_file = $_FILES['main_image']['tmp_name']; // will move later
+        }
+
+        // ----- GALLERY: start from existing -----
+        $existing_gallery = !empty($old_gallery_string) ? explode(',', $old_gallery_string) : [];
+        $existing_gallery = array_map('trim', $existing_gallery);
+
+        // Remove selected old gallery images (DB side)
+        if (!empty($remove_gallery_images)) {
+            $existing_gallery = array_filter($existing_gallery, function ($img) use ($remove_gallery_images) {
+                return !in_array($img, $remove_gallery_images, true);
+            });
+        }
+
+        // Prepare new gallery file paths (no move yet)
+        $new_gallery_files = []; // list of ['tmp' => tmp_path, 'dest' => final_path]
+
+        if (!empty($_FILES['gallery_images']['name']) && is_array($_FILES['gallery_images']['name'])) {
+            $gallery_dir = 'uploads/products/gallery/';
+            if (!is_dir($gallery_dir)) {
+                mkdir($gallery_dir, 0755, true);
+            }
+
+            $galleryCount = count($_FILES['gallery_images']['name']);
+            for ($i = 0; $i < $galleryCount; $i++) {
+                if (empty($_FILES['gallery_images']['name'][$i])) {
+                    continue;
+                }
+
+                $dest = $gallery_dir . uniqid() . $_FILES['gallery_images']['name'][$i];
+                $tmp = $_FILES['gallery_images']['tmp_name'][$i];
+                $new_gallery_files[] = ['tmp' => $tmp, 'dest' => $dest];
+                $existing_gallery[] = $dest; // include in final gallery list
+            }
+        }
+
+        // Final gallery string for DB
+        $gallery_images_path = !empty($existing_gallery) ? implode(',', $existing_gallery) : null;
+
+        // =========================
+        // 3) Read other fields
+        // =========================
+        $name = $_POST['name'];
+        $categoryId = $_POST['category_id'];
+        $brand = $_POST['brand'];
+        $description = $_POST['description'];
+        $longDescription = $_POST['long_description'];
+        $price = $_POST['price'];
+        $discount = $_POST['discount'];
+        $stock = $_POST['stock'];
+        $status = $_POST['status'];
+
+        // =========================
+        // 4) UPDATE DB only (no file ops)
+        // =========================
+        $updateQuery = "UPDATE products
+    SET name=?, category_id=?, brand=?, price=?, discount=?, stock=?,
+    description=?, long_description=?, image=?, gallery_images=?, status=?
+    WHERE id=?";
+
+        $updateStmt = mysqli_prepare($connection, $updateQuery);
+        if ($updateStmt) {
+            mysqli_stmt_bind_param(
+                $updateStmt,
+                'sisddisssssi', // adjust according to your column types
+                $name,
+                $categoryId,
+                $brand,
+                $price,
+                $discount,
+                $stock,
+                $description,
+                $longDescription,
+                $main_image_path,
+                $gallery_images_path,
+                $status,
+                $productId
+            );
+
+            if (mysqli_stmt_execute($updateStmt)) {
+                // =========================
+                // 5) DB update success → now handle filesystem
+                // =========================
+
+                // (a) Move new main image (if any)
+                if (!empty($main_tmp_file) && !empty($main_image_path)) {
+                    @move_uploaded_file($main_tmp_file, $main_image_path);
+                }
+
+                // (b) Move new gallery images
+                foreach ($new_gallery_files as $file) {
+                    @move_uploaded_file($file['tmp'], $file['dest']);
+                }
+
+                // (c) Delete removed main image from disk
+                if ($remove_main_image && !empty($old_main_image) && file_exists($old_main_image)) {
+                    @unlink($old_main_image);
+                }
+
+                // (d) Delete removed gallery images from disk
+                if (!empty($remove_gallery_images)) {
+                    foreach ($remove_gallery_images as $old_gallery_img) {
+                        if (!empty($old_gallery_img) && file_exists($old_gallery_img)) {
+                            @unlink($old_gallery_img);
+                        }
+                    }
+                }
+                setcookie('success', 'Product updated successfully!', time() + 5);
+            } else {
+                setcookie('error', 'Failed to update product. Please try again.', time() + 5);
+            }
+
+            mysqli_stmt_close($updateStmt);
+        }
     }
 }
 ?>
@@ -329,6 +481,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'change_status') {
     <br>
 
     <?php
+    include_once 'db_config.php';
 
     // Pagination + search logic
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
@@ -517,6 +670,175 @@ if (isset($_POST['action']) && $_POST['action'] === 'change_status') {
                             <button class="btn btn-sm btn-warning mb-1" data-bs-toggle="modal"
                                 data-bs-target="#editProductModal<?= (int) $row['id'] ?>">Edit</button>
                             <!-- Edit product modal -->
+                            <div class="modal fade" id="editProductModal<?= (int) $row['id'] ?>" tabindex="-1"
+                                aria-labelledby="editProductModalLabel<?= (int) $row['id'] ?>" aria-hidden="true">
+                                <div class="modal-dialog modal-lg modal-dialog-scrollable">
+                                    <div class="modal-content">
+                                        <form method="post" enctype="multipart/form-data" novalidate>
+                                            <div class="modal-header">
+                                                <h5 class="modal-title" id="editProductModalLabel<?= (int) $row['id'] ?>">
+                                                    Edit Product - <?= htmlspecialchars($row['name']) ?></h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                                    aria-label="Close"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <input type="hidden" name="action" value="update">
+                                                <input type="hidden" name="product_id" value="<?= (int) $row['id'] ?>">
+
+                                                <div class="mb-3">
+                                                    <label class="form-label">Name</label>
+                                                    <input type="text" class="form-control" name="name"
+                                                        value="<?= htmlspecialchars($row['name']) ?>" required
+                                                        data-validation="required,min,max" data-min="2" data-max="255">
+                                                    <small id="edit_name_error_<?= (int) $row['id'] ?>"></small>
+                                                </div>
+                                                <div class="row g-3 mb-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Category ID</label>
+                                                        <input type="number" step="1" min="0" class="form-control"
+                                                            name="category_id"
+                                                            value="<?= htmlspecialchars((string) $row['category_id']) ?>"
+                                                            data-validation="required,number">
+                                                        <small id="edit_category_id_error_<?= (int) $row['id'] ?>"></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Brand</label>
+                                                        <input type="text" class="form-control" name="brand"
+                                                            value="<?= htmlspecialchars((string) $row['brand']) ?>"
+                                                            data-validation="required,min,max" data-min="2" data-max="100">
+                                                        <small id="edit_brand_error_<?= (int) $row['id'] ?>"></small>
+                                                    </div>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">Description</label>
+                                                    <textarea class="form-control" name="description" rows="4"
+                                                        data-validation="required max"
+                                                        data-max="2000"><?= htmlspecialchars((string) $row['description']) ?></textarea>
+                                                    <small id="edit_description_error_<?= (int) $row['id'] ?>"></small>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">Long Description</label>
+                                                    <textarea class="form-control" name="long_description" rows="5"
+                                                        data-validation="required max"
+                                                        data-max="10000"><?= htmlspecialchars((string) $row['long_description']) ?></textarea>
+                                                    <small id="edit_long_description_error_<?= (int) $row['id'] ?>"></small>
+                                                </div>
+                                                <div class="row g-3 mb-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Price</label>
+                                                        <input type="number" step="0.01" min="0.01" class="form-control"
+                                                            name="price"
+                                                            value="<?= htmlspecialchars((string) $row['price']) ?>" required
+                                                            data-validation="required">
+                                                        <small id="edit_price_error_<?= (int) $row['id'] ?>"></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Discount</label>
+                                                        <input type="number" step="0.01" min="0.01" class="form-control"
+                                                            name="discount"
+                                                            value="<?= htmlspecialchars((string) $row['discount']) ?>" required
+                                                            data-validation="required">
+                                                        <small id="edit_price_error_<?= (int) $row['id'] ?>"></small>
+                                                    </div>
+                                                </div>
+                                                <div class="row g-3 mb-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Stock</label>
+                                                        <input type="number" step="1" min="0" class="form-control"
+                                                            name="stock"
+                                                            value="<?= htmlspecialchars((string) $row['stock']) ?>" required
+                                                            data-validation="required,number,min" data-min="0">
+                                                        <small id="edit_stock_error_<?= (int) $row['id'] ?>"></small>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Status</label>
+                                                        <select class="form-select" name="status" required>
+                                                            <option value="Active"
+                                                                <?= (strtolower((string) $row['status']) === 'active' || $row['status'] == 1) ? 'selected' : '' ?>>
+                                                                Active</option>
+                                                            <option value="Inactive"
+                                                                <?= (strtolower((string) $row['status']) !== 'active' && $row['status'] != 1) ? 'selected' : '' ?>>
+                                                                Inactive</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">Main Image</label>
+                                                    <?php if (!empty($row['image'])): ?>
+                                                        <div class="mb-2 p-3 bg-light rounded border">
+                                                            <p class="mb-2"><strong>Current Main Image</strong></p>
+                                                            <img src="<?= htmlspecialchars($row['image']) ?>"
+                                                                alt="<?= htmlspecialchars($row['name']) ?>"
+                                                                class="img-fluid rounded mb-2" style="max-height: 150px;">
+                                                            <div class="form-check">
+                                                                <input class="form-check-input" type="checkbox"
+                                                                    id="remove_main_<?= (int) $row['id'] ?>"
+                                                                    name="remove_main_image" value="1">
+                                                                <label class="form-check-label"
+                                                                    for="remove_main_<?= (int) $row['id'] ?>">
+                                                                    Remove this image
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <label class="form-label mt-3">Upload New Main Image</label>
+                                                    <input type="file" class="form-control" name="main_image"
+                                                        accept=".jpg,.jpeg,.png,.webp" data-validation="fileSize,fileType"
+                                                        data-filesize-mb="2"
+                                                        data-filetype="image/jpeg,image/png,image/jpg,image/jpeg,image/webp"
+                                                        data-error="#edit_main_image_error_<?= (int) $row['id'] ?>">
+                                                    <small id="edit_main_image_error_<?= (int) $row['id'] ?>"></small>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">Gallery Images</label>
+                                                    <?php if (!empty($row['gallery_images'])): ?>
+                                                        <div class="mb-3 p-3 bg-light rounded border">
+                                                            <p class="mb-2"><strong>Current Gallery Images</strong></p>
+                                                            <div class="row g-2">
+                                                                <?php foreach (explode(',', (string) $row['gallery_images']) as $index => $galleryImage): ?>
+                                                                    <?php $galleryImage = trim($galleryImage); ?>
+                                                                    <?php if ($galleryImage !== ''): ?>
+                                                                        <div class="col-md-3">
+                                                                            <div class="d-flex flex-column">
+                                                                                <img src="<?= htmlspecialchars($galleryImage) ?>"
+                                                                                    alt="Gallery" class="img-fluid rounded border"
+                                                                                    style="height: 100px; object-fit: cover;">
+                                                                                <div class="form-check mt-2">
+                                                                                    <input class="form-check-input" type="checkbox"
+                                                                                        id="remove_gallery_<?= (int) $row['id'] ?>_<?= $index ?>"
+                                                                                        name="remove_gallery_images[]"
+                                                                                        value="<?= htmlspecialchars($galleryImage) ?>">
+                                                                                    <label class="form-check-label"
+                                                                                        for="remove_gallery_<?= (int) $row['id'] ?>_<?= $index ?>">Remove</label>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    <?php endif; ?>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                            <small class="d-block mt-2 text-muted">Check images to remove
+                                                                them</small>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <label class="form-label mt-3">Add New Gallery Images</label>
+                                                    <input type="file" class="form-control" name="gallery_images[]"
+                                                        accept=".jpg,.jpeg,.png,.webp" multiple
+                                                        data-validation="fileSize,fileType" data-filesize-mb="2"
+                                                        data-filetype="image/jpeg,image/png,image/jpg,image/jpeg,image/webp"
+                                                        data-error="#edit_gallery_images_error_<?= (int) $row['id'] ?>">
+                                                    <small id="edit_gallery_images_error_<?= (int) $row['id'] ?>"></small>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary"
+                                                    data-bs-dismiss="modal">Cancel</button>
+                                                <button type="submit" class="btn btn-primary">Update Product</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+
 
 
                             <!-- Delete Product Button -->
